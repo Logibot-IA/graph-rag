@@ -1,3 +1,12 @@
+*venv*
+*sixth*
+
 .env
-.venv
-results
+.vscode
+.idea
+
+__pycache__
+
+chroma_context_db
+results*
+docs_backup
