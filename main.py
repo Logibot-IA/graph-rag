@@ -23,17 +23,15 @@ from ragas.metrics import (
     context_recall,
 )
 
+from langsmith import traceable
 
-# ============================================================
-# CONFIGURAÇÕES
-# ============================================================
+
 
 load_dotenv()
 
 DOCS_DIR = "./docs/"
 PERSIST_DIR = "./chroma_graph_db"
 
-RESULTS_BASE_DIR = "results"
 N_RUNS = 15
 
 CHUNK_SIZE = 800
@@ -61,39 +59,39 @@ os.environ["LANGCHAIN_PROJECT"] = os.getenv(
 
 
 test_queries = [
-    # FÁCEIS
+    # Fáceis
     "O que significa ‘lógica de programação’ em palavras simples?",
     "De um jeito bem direto: o que é um algoritmo?",
     "Qual é a diferença entre constante e variável?",
     "Pra que serve o comando ‘leia’ em um algoritmo?",
 
-    # MÉDIAS
+    # Médias
     "O que é um comando de atribuição e por que o tipo do dado precisa ser compatível com o tipo da variável?",
     "O que são operadores aritméticos (como +, -, * e /) e pra que eles servem?",
     "Pra que servem os operadores relacionais numa expressão?",
 
-    # DIFÍCEIS
+    # Difíceis
     "O que é uma ‘expressão lógica’?",
     "Em uma repetição, o que é um contador e como ele é incrementado?",
     "Como funciona a repetição ‘repita ... até’ e o que ela garante sobre a execução do bloco?"
 ]
 
 ground_truths = [
-    # FÁCEIS
+    # Fáceis
     "Lógica de programação é o uso correto das leis do pensamento, da ‘ordem da razão’ e de processos formais de raciocínio e simbolização na programação de computadores, com o objetivo de produzir soluções logicamente válidas e coerentes para resolver problemas.",
     "Um algoritmo é uma sequência de passos bem definidos que têm por objetivo solucionar um determinado problema.",
-    "Um dado é constante quando não sofre variação durante a execução do algoritmo: seu valor permanece constante do início ao fim (e também em execuções diferentes ao longo do tempo). Já um dado é variável quando pode ser alterado em algum instante durante a execução do algoritmo, ou quando seu valor depende da execução em um certo momento ou circunstância.",
-    "O comando de entrada de dados ‘leia’ é usado para que o algoritmo receba os dados de que precisa: ele tem a finalidade de atribuir o dado fornecido à variável identificada, seguindo a sintaxe leia(identificador) (por exemplo, leia(X) ou leia(A, XPTO, NOTA)).",
+    "Um dado é constante quando não sofre variação durante a execução do algoritmo: seu valor permanece constante do início ao fim. Já um dado é variável quando pode ser alterado em algum instante durante a execução do algoritmo.",
+    "O comando de entrada de dados ‘leia’ é usado para que o algoritmo receba os dados de que precisa, atribuindo o dado fornecido à variável identificada.",
 
-    # MÉDIAS
-    "Um comando de atribuição permite fornecer um valor a uma variável. O tipo do dado atribuído deve ser compatível com o tipo da variável: por exemplo, só se pode atribuir um valor lógico a uma variável declarada como do tipo lógico.",
-    "Operadores aritméticos são o conjunto de símbolos que representam as operações básicas da matemática (por exemplo: + para adição, - para subtração, * para multiplicação e / para divisão). Para potenciação e radiciação, o livro indica o uso das palavras‑chave pot e rad.",
-    "Operadores relacionais são usados para realizar comparações entre dois valores de mesmo tipo primitivo. Esses valores podem ser constantes, variáveis ou expressões aritméticas, e esses operadores são comuns na construção de equações.",
+    # Médias
+    "Um comando de atribuição permite fornecer um valor a uma variável. O tipo do dado atribuído deve ser compatível com o tipo da variável.",
+    "Operadores aritméticos são símbolos que representam operações matemáticas, como +, -, * e /.",
+    "Operadores relacionais são usados para realizar comparações entre dois valores de mesmo tipo primitivo.",
 
-    # DIFÍCEIS
+    # Difíceis
     "Uma expressão lógica é aquela cujos operadores são lógicos ou relacionais e cujos operandos são relações, variáveis ou constantes do tipo lógico.",
-    "Um contador é um modo de contagem feito com a ajuda de uma variável com um valor inicial, que é incrementada a cada repetição. Incrementar significa somar um valor constante (normalmente 1) a cada repetição.",
-    "A estrutura de repetição ‘repita ... até’ permite que um bloco (ou ação primitiva) seja repetido até que uma determinada condição seja verdadeira. Pela sintaxe da estrutura, o bloco é executado pelo menos uma vez, independentemente da validade inicial da condição."
+    "Um contador é um modo de contagem feito com uma variável inicial, que é incrementada a cada repetição.",
+    "A estrutura ‘repita ... até’ repete um bloco até que uma condição seja verdadeira e garante que o bloco execute pelo menos uma vez."
 ]
 
 
@@ -137,7 +135,6 @@ def dividir_em_chunks(docs: List[Document]) -> List[Document]:
         chunk.metadata["page"] = chunk.metadata.get("page", None)
 
     return chunks
-
 
 
 def criar_vectorstore(embeddings):
@@ -280,7 +277,11 @@ def recuperar_chunks_vetoriais(query: str, vectordb, top_k: int = TOP_K):
     return retriever.invoke(query)
 
 
-def encontrar_nos_semente(graph: nx.DiGraph, docs_recuperados: List[Document]) -> Set[str]:
+def encontrar_nos_semente(
+    graph: nx.DiGraph,
+    docs_recuperados: List[Document]
+) -> Set[str]:
+
     chunk_ids = {
         doc.metadata.get("chunk_id")
         for doc in docs_recuperados
@@ -303,6 +304,7 @@ def expandir_nos_do_grafo(
     nos_semente: Set[str],
     hops: int = GRAPH_HOPS
 ) -> Set[str]:
+
     nos_expandidos = set(nos_semente)
 
     for _ in range(hops):
@@ -322,6 +324,7 @@ def converter_grafo_em_contexto(
     graph: nx.DiGraph,
     nos: Set[str]
 ) -> List[str]:
+
     subgraph = graph.subgraph(nos)
     contextos = []
 
@@ -347,10 +350,11 @@ def recuperar_contextos_do_grafo(
     docs_recuperados: List[Document],
     hops: int = GRAPH_HOPS
 ) -> List[str]:
+
     nos_semente = encontrar_nos_semente(graph, docs_recuperados)
     nos_expandidos = expandir_nos_do_grafo(graph, nos_semente, hops)
-    return converter_grafo_em_contexto(graph, nos_expandidos)
 
+    return converter_grafo_em_contexto(graph, nos_expandidos)
 
 
 def gerar_resposta_graph_rag(
@@ -359,6 +363,7 @@ def gerar_resposta_graph_rag(
     contextos_grafo: List[str],
     llm
 ) -> str:
+
     contexto_textual = "\n\n".join(contextos_textuais)
     contexto_grafo = "\n".join(contextos_grafo)
 
@@ -385,6 +390,7 @@ RESPOSTA:
     return llm.invoke(prompt).content
 
 
+@traceable(name="graph-rag-query", run_type="chain")
 def graph_rag_query(
     query: str,
     vectordb,
@@ -393,6 +399,7 @@ def graph_rag_query(
     top_k: int = TOP_K,
     graph_hops: int = GRAPH_HOPS
 ) -> Dict[str, Any]:
+
     docs_recuperados = recuperar_chunks_vetoriais(
         query=query,
         vectordb=vectordb,
@@ -423,8 +430,6 @@ def graph_rag_query(
         "question": query,
         "answer": resposta,
         "contexts": todos_contextos,
-        "text_contexts": contextos_textuais,
-        "graph_contexts": contextos_grafo
     }
 
 
@@ -434,12 +439,11 @@ def gerar_dados_ragas(
     ground_truths: List[str],
     vectordb,
     graph: nx.DiGraph,
-    llm
+    llm,
 ) -> List[Dict[str, Any]]:
+
     if len(test_queries) != len(ground_truths):
-        raise ValueError(
-            "test_queries e ground_truths precisam ter o mesmo tamanho."
-        )
+        raise ValueError("test_queries e ground_truths precisam ter o mesmo tamanho.")
 
     ragas_data = []
 
@@ -460,26 +464,14 @@ def gerar_dados_ragas(
             "answer": result["answer"],
             "contexts": result["contexts"],
             "ground_truth": ground_truths[i],
-            "text_contexts_count": len(result["text_contexts"]),
-            "graph_contexts_count": len(result["graph_contexts"])
         })
 
     return ragas_data
 
 
 
-def run_ragas(ragas_data: List[Dict[str, Any]], llm, embeddings):
-    dataset_data = []
-
-    for item in ragas_data:
-        dataset_data.append({
-            "question": item["question"],
-            "answer": item["answer"],
-            "contexts": item["contexts"],
-            "ground_truth": item["ground_truth"]
-        })
-
-    dataset = Dataset.from_list(dataset_data)
+def run_ragas(ragas_data, llm, embeddings):
+    dataset = Dataset.from_list(ragas_data)
 
     result = evaluate(
         dataset=dataset,
@@ -496,10 +488,11 @@ def run_ragas(ragas_data: List[Dict[str, Any]], llm, embeddings):
     print("=== RESULTADOS RAGAS ===")
     print(result)
 
-    df = result.to_pandas()
+    df_ragas = result.to_pandas()
+    df_base = pd.DataFrame(ragas_data)
+    df_final = pd.concat([df_base, df_ragas], axis=1)
 
-    return result, df
-
+    return df_final
 
 
 def salvar(df: pd.DataFrame, nome_base: str = "graph-rag-run") -> str:
@@ -512,6 +505,7 @@ def salvar(df: pd.DataFrame, nome_base: str = "graph-rag-run") -> str:
         else:
             for n in count(2):
                 candidate = f"{base_dir}_{n}"
+
                 if not os.path.exists(candidate):
                     os.makedirs(candidate, exist_ok=False)
                     salvar._results_dir = candidate
@@ -532,6 +526,7 @@ def salvar(df: pd.DataFrame, nome_base: str = "graph-rag-run") -> str:
                 encoding="utf-8-sig",
                 sep=";"
             )
+
             print(f"Salvo em: {caminho}")
             return caminho
 
@@ -550,10 +545,10 @@ def preparar_graph_rag():
     print("Criando vectorstore...")
     vectordb = criar_vectorstore(embeddings)
 
-    print("Indexando documentos, se necessário...")
+    print("Indexando documentos no Chroma, se necessário...")
     indexar_documentos_se_necessario(vectordb, chunks)
 
-    print("Construindo grafo...")
+    print("Construindo grafo conceitual...")
     graph = construir_grafo(chunks, llm)
 
     return {
@@ -565,55 +560,42 @@ def preparar_graph_rag():
     }
 
 
+
 def executar_runs_graph_rag(
     test_queries: List[str],
     ground_truths: List[str],
     pipeline: Dict[str, Any],
     n_runs: int = N_RUNS
 ):
-    dfs = []
 
     for run in range(1, n_runs + 1):
-        print(f"\n=== RODADA {run}/{n_runs} ===")
+        print(f"\n=== RODADA COMPLETA GRAPH RAG {run}/{n_runs} ===")
 
         ragas_data = gerar_dados_ragas(
             test_queries=test_queries,
             ground_truths=ground_truths,
             vectordb=pipeline["vectordb"],
             graph=pipeline["graph"],
-            llm=pipeline["llm"]
+            llm=pipeline["llm"],
         )
 
-        _, df = run_ragas(
+        df = run_ragas(
             ragas_data=ragas_data,
             llm=pipeline["llm"],
             embeddings=pipeline["embeddings"]
         )
-
-        df["run"] = run
 
         salvar(
             df=df,
             nome_base=f"graph-rag-run-{run}"
         )
 
-        dfs.append(df)
-
-    df_summary = pd.concat(dfs, ignore_index=True)
-
-    salvar(
-        df=df_summary,
-        nome_base="graph-rag-all-runs"
-    )
-
-    return df_summary
-
 
 
 if __name__ == "__main__":
     pipeline = preparar_graph_rag()
 
-    df_resultados = executar_runs_graph_rag(
+    executar_runs_graph_rag(
         test_queries=test_queries,
         ground_truths=ground_truths,
         pipeline=pipeline,
