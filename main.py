@@ -569,7 +569,7 @@ def executar_runs_graph_rag(
     test_queries: List[str],
     ground_truths: List[str],
     pipeline: Dict[str, Any],
-    n_runs: int = 15
+    n_runs: int = N_RUNS
 ):
     dfs = []
 
@@ -609,9 +609,6 @@ def executar_runs_graph_rag(
     return df_summary
 
 
-# ============================================================
-# MAIN
-# ============================================================
 
 if __name__ == "__main__":
     pipeline = preparar_graph_rag()
@@ -620,5 +617,5 @@ if __name__ == "__main__":
         test_queries=test_queries,
         ground_truths=ground_truths,
         pipeline=pipeline,
-        n_runs=15
+        n_runs=N_RUNS
     )
