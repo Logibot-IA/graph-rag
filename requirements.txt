@@ -4,10 +4,10 @@ langchain-text-splitters
 langchain-huggingface
 
 # Descomente a linha abaixo para usar o OpenAI, e comente a linha do Ollama
-# langchain-openai
+langchain-openai
 
 # Em caso de usar o Ollama, descomente a linha abaixo e comente a linha do langchain-openai
-langchain-ollama
+# langchain-ollama
 
 sentence-transformers
 
