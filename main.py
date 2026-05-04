@@ -59,9 +59,6 @@ os.environ["LANGCHAIN_PROJECT"] = os.getenv(
 )
 
 
-# ============================================================
-# SUAS PERGUNTAS E RESPOSTAS ESPERADAS
-# ============================================================
 
 test_queries = [
     # FÁCEIS
@@ -100,9 +97,6 @@ ground_truths = [
 ]
 
 
-# ============================================================
-# MODELOS
-# ============================================================
 
 def criar_llm():
     return ChatOpenAI(
@@ -119,9 +113,6 @@ def criar_embeddings():
     )
 
 
-# ============================================================
-# DOCUMENTOS E CHUNKS
-# ============================================================
 
 def carregar_pdfs(docs_dir: str) -> List[Document]:
     loader = DirectoryLoader(
@@ -148,9 +139,6 @@ def dividir_em_chunks(docs: List[Document]) -> List[Document]:
     return chunks
 
 
-# ============================================================
-# VECTORSTORE
-# ============================================================
 
 def criar_vectorstore(embeddings):
     return Chroma(
@@ -182,9 +170,6 @@ def indexar_documentos_se_necessario(vectordb, chunks: List[Document]):
     print("Ingestão vetorial concluída.")
 
 
-# ============================================================
-# EXTRAÇÃO DE RELAÇÕES DO GRAFO
-# ============================================================
 
 def extrair_relacoes_do_chunk(chunk: Document, llm) -> List[Dict[str, str]]:
     prompt = f"""
@@ -287,9 +272,6 @@ def construir_grafo(chunks: List[Document], llm) -> nx.DiGraph:
     return graph
 
 
-# ============================================================
-# RECUPERAÇÃO GRAPH RAG
-# ============================================================
 
 def recuperar_chunks_vetoriais(query: str, vectordb, top_k: int = TOP_K):
     retriever = vectordb.as_retriever(
@@ -370,9 +352,6 @@ def recuperar_contextos_do_grafo(
     return converter_grafo_em_contexto(graph, nos_expandidos)
 
 
-# ============================================================
-# GERAÇÃO DE RESPOSTA
-# ============================================================
 
 def gerar_resposta_graph_rag(
     query: str,
@@ -449,9 +428,6 @@ def graph_rag_query(
     }
 
 
-# ============================================================
-# DATASET PARA RAGAS
-# ============================================================
 
 def gerar_dados_ragas(
     test_queries: List[str],
@@ -491,9 +467,6 @@ def gerar_dados_ragas(
     return ragas_data
 
 
-# ============================================================
-# AVALIAÇÃO RAGAS
-# ============================================================
 
 def run_ragas(ragas_data: List[Dict[str, Any]], llm, embeddings):
     dataset_data = []
@@ -528,9 +501,6 @@ def run_ragas(ragas_data: List[Dict[str, Any]], llm, embeddings):
     return result, df
 
 
-# ============================================================
-# EXPORTAÇÃO ITERÁVEL
-# ============================================================
 
 def salvar(df: pd.DataFrame, nome_base: str = "graph-rag-run") -> str:
     if not hasattr(salvar, "_results_dir"):
@@ -566,9 +536,6 @@ def salvar(df: pd.DataFrame, nome_base: str = "graph-rag-run") -> str:
             return caminho
 
 
-# ============================================================
-# PIPELINE COMPLETO
-# ============================================================
 
 def preparar_graph_rag():
     llm = criar_llm()
