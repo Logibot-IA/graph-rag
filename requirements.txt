@@ -1,14 +1,14 @@
 langchain
 langchain-community
-langchain-openai
+langchain-openai>=1.1.11
 langchain-text-splitters
-
-langchain-huggingface
-
-sentence-transformers
+langgraph
+openai
 
 chromadb
+networkx
 pypdf
 datasets
 python-dotenv
 ragas
+langsmith

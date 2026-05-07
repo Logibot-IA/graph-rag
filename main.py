@@ -2,17 +2,14 @@ import os
 import uuid
 import json
 import re
-from itertools import count
 from typing import List, Dict, Any, TypedDict, Annotated, Optional
 from dataclasses import dataclass, field
 
-import dotenv
 import networkx as nx
 
-from langchain_core.vectorstores import InMemoryVectorStore
+from langchain_community.vectorstores import Chroma
 from langchain_community.document_loaders import DirectoryLoader, PyPDFLoader
 from langchain_text_splitters import RecursiveCharacterTextSplitter
-from langchain_huggingface import HuggingFaceEmbeddings
 from langchain.tools import tool
 from langchain_core.messages import HumanMessage, SystemMessage
 from langchain_core.documents import Document
@@ -21,65 +18,74 @@ from langgraph.graph import StateGraph, END
 from langgraph.graph.message import add_messages
 from langgraph.checkpoint.memory import MemorySaver
 from langgraph.prebuilt import ToolNode
+from langsmith import traceable
 
-from langchain.chat_models import init_chat_model
+from rag_settings import (
+    build_embeddings,
+    build_llm,
+    build_ragas_llm,
+    configure_environment,
+    extract_response_text,
+    finish_usage_tracker,
+    get_chroma_settings,
+    run_ragas as avaliar_com_ragas,
+    salvar as salvar_resultados,
+    start_usage_tracker,
+)
 
-from transformers import logging as hf_logging
-from datasets import Dataset
-from ragas import evaluate
-from ragas.metrics import faithfulness, answer_relevancy, context_precision, context_recall
+configure_environment("benchmark-graph-rag")
 
-hf_logging.set_verbosity_error()
-
-dotenv.load_dotenv()
-
-os.environ["OPENAI_API_KEY"] = os.getenv("OPENAI_API_KEY")
-os.environ["OPENAI_BASE_URL"] = os.getenv("OPEN_API_URL", "https://inference.do-ai.run/v1")
-os.environ["HF_TOKEN"] = os.getenv("HF_TOKEN")
-os.environ["LANGCHAIN_TRACING_V2"] = os.getenv("LANGCHAIN_TRACING_V2", "true")
-os.environ["LANGCHAIN_API_KEY"] = os.getenv("LANGCHAIN_API_KEY")
-os.environ["LANGCHAIN_PROJECT"] = os.getenv("LANGCHAIN_PROJECT", "benchmark-graph-rag")
+DOCS_DIR = os.getenv("DOCS_DIR", "./docs/")
+PERSIST_DIR, CHROMA_COLLECTION_NAME = get_chroma_settings(
+    "./chroma_graph_db_openai",
+    "graph_collection_openai",
+)
 
 test_queries = [
-    "Como o livro Algoritmos: Teoria e Prática, de Cormen, define a notação Θ (Theta) e qual teorema relaciona Θ com as notações O e Ω?",
-    "Como Manzano e Oliveira, no livro Algoritmos: Lógica para Desenvolvimento de Programação de Computadores, descrevem o papel do programador de computador e o que é o diagrama de blocos?",
-    "Segundo Dilermando Junior e Nakamiti em Algoritmos e Programação de Computadores, qual é a origem do termo \"algoritmo\" e em que consiste o Algoritmo Euclidiano para o cálculo do mdc?",
-    "Por que, segundo Sebesta no livro Conceitos de Linguagens de Programação, é importante estudar os conceitos de linguagens de programação mesmo para quem não vai criar uma nova linguagem?",
-    "Como Bhargava, no livro Entendendo Algoritmos, define a notação Big O e o que ela estabelece sobre o tempo de execução de um algoritmo?",
-    "Segundo Szwarcfiter em Estruturas de Dados e Seus Algoritmos, quais são as complexidades das operações de seleção, inserção, remoção, alteração e construção em um heap?",
-    "Como Ascencio, no livro Fundamentos da Programação de Computadores, descreve a plataforma Java, os arquivos gerados na compilação e o papel da Máquina Virtual Java?",
-    "Segundo o livro Introdução a Algoritmos e Programação, quais são as três partes que compõem um algoritmo executado em um computador e quais sistemas de representação numérica são utilizados internamente?",
-    "Quais são as quatro perguntas que Nilo Menezes, em Introdução à Programação com Python, recomenda que o iniciante responda antes de começar a aprender a programar e qual é, segundo o autor, a maneira mais difícil de aprender?",
-    "Quais são os operadores aritméticos não convencionais apresentados por Forbellone em Lógica de Programação e como o autor define o conceito de contador?"
+    # FÁCEIS
+    "O que significa ‘lógica de programação’ em palavras simples?",
+    "De um jeito bem direto: o que é um algoritmo?",
+    "Qual é a diferença entre constante e variável?",
+    "Pra que serve o comando ‘leia’ em um algoritmo?",
+
+    # MÉDIAS
+    "O que é um comando de atribuição e por que o tipo do dado precisa ser compatível com o tipo da variável?",
+    "O que são operadores aritméticos (como +, -, * e /) e pra que eles servem?",
+    "Pra que servem os operadores relacionais numa expressão?",
+
+    # DIFÍCEIS
+    "O que é uma ‘expressão lógica’?",
+    "Em uma repetição, o que é um contador e como ele é incrementado?",
+    "Como funciona a repetição ‘repita ... até’ e o que ela garante sobre a execução do bloco?"
 ]
+
 
 ground_truths = [
-    "Cormen define que, para uma função g(n), Θ(g(n)) representa o conjunto de funções com limites assintóticos justos: existe um limite superior e inferior do mesmo crescimento. O Teorema 3.1 do livro estabelece que, para quaisquer duas funções f(n) e g(n), tem-se f(n) = Θ(g(n)) se e somente se f(n) = O(g(n)) e f(n) = Ω(g(n)). Em outras palavras, uma função tem ordem Θ exatamente quando possui simultaneamente o mesmo limite assintótico superior (O) e inferior (Ω).",
-    "Manzano e Oliveira comparam o programador a um construtor (ou pedreiro especializado), responsável por construir o programa empilhando instruções de uma linguagem como se fossem tijolos, inclusive elaborando a interface gráfica. Além de interpretar o fluxograma desenhado pelo analista, o programador deve detalhar a lógica do programa em nível micro, desenhando uma planta operacional chamada diagrama de blocos (ou diagrama de quadros), seguindo a norma ISO 5807:1985. Essa atividade exige alto grau de atenção e cuidado, pois o descuido pode \"matar\" uma empresa.",
-    "Segundo Dilermando Junior e Nakamiti, o termo \"algoritmo\" deriva do nome do matemático persa al-Khwarizmi, considerado por muitos o \"Pai da Álgebra\". No século XII, Adelardo de Bath traduziu uma de suas obras para o latim, registrando o termo como \"Algorithmi\"; originalmente referia-se às regras de aritmética com algarismos indo-arábicos e, posteriormente, passou a designar qualquer procedimento definido para resolver problemas. O Algoritmo Euclidiano, criado por Euclides, calcula o máximo divisor comum (mdc): divide-se a por b, obtendo o resto r; substitui-se a por b e b por r; e repete-se a divisão até que não seja mais possível dividir, sendo o último valor de a o mdc.",
-    "Sebesta argumenta que estudar conceitos de linguagens valoriza recursos e construções importantes e estimula o programador a usá-los mesmo quando a linguagem em uso não os suporta diretamente — por exemplo, simulando matrizes associativas de Perl em outra linguagem. Também fornece embasamento para escolher a linguagem mais adequada a cada projeto, evitando que o profissional se restrinja àquela com a qual está mais familiarizado. Por fim, conhecer uma gama mais ampla de linguagens torna o aprendizado de novas linguagens mais fácil, ampliando a capacidade de avaliar trade-offs de projeto.",
-    "Bhargava define a notação Big O como uma forma de medir o tempo de execução de um algoritmo no pior caso (pior hipótese), descrevendo o quão rapidamente esse tempo cresce em relação ao tamanho n da entrada. Por exemplo, a pesquisa simples tem tempo O(n) — no pior caso verifica todos os elementos da lista — enquanto a pesquisa binária tem tempo O(log n). Algoritmos com tempos diferentes crescem a taxas muito distintas, e o Big O permite compará-los independentemente do hardware utilizado.",
-    "Segundo Szwarcfiter, em um heap o elemento de maior prioridade é sempre a raiz da árvore, e as operações têm os seguintes parâmetros de eficiência: seleção em O(1), pois basta retornar a raiz; inserção em O(log n); remoção em O(log n); alteração em O(log n); e construção em O(n), tempo este inferior ao de uma ordenação. Esses tempos tornam o heap especialmente adequado para implementar listas de prioridades.",
-    "Ascencio explica que a tecnologia Java é composta pela linguagem de programação Java e pela plataforma de desenvolvimento Java, com características de simplicidade, orientação a objetos, portabilidade, alta performance e segurança. Os programas são escritos em arquivos de texto com extensão .java e, ao serem compilados pelo compilador javac, geram arquivos .class compostos por bytecodes — código interpretado pela Máquina Virtual Java (JVM). A plataforma Java é composta apenas por software, pois é a JVM que faz a interface entre os programas e o sistema operacional.",
-    "O livro descreve que um algoritmo, quando programado em um computador, é constituído por pelo menos três partes: entrada de dados, processamento de dados e saída de dados. Internamente, os computadores digitais utilizam o sistema binário (base 2), com apenas dois algarismos (0 e 1), aproveitando a noção de ligado/desligado ou verdadeiro/falso. Como representações auxiliares, são também utilizados o sistema decimal (base 10), o sistema hexadecimal (base 16, com dígitos 0–9 e A–F) e o sistema octal (base 8).",
-    "Menezes propõe que o iniciante responda a quatro perguntas antes de começar: (1) Você quer aprender a programar?; (2) Como está seu nível de paciência?; (3) Quanto tempo você pretende estudar?; (4) Qual o seu objetivo ao programar? Para o autor, a maneira mais difícil de aprender a programar é não querer programar — a vontade deve vir do próprio aluno e não de um professor ou amigo. Programar é uma arte que exige tempo, dedicação e paciência para que a mente se acostume com a nova forma de pensar.",
-    "Forbellone apresenta operadores aritméticos não convencionais úteis na construção de algoritmos: pot(x,y) para potenciação (x elevado a y), rad(x) para radiciação (raiz quadrada de x), mod para o resto da divisão (ex.: 9 mod 4 = 1) e div para o quociente da divisão inteira (ex.: 9 div 4 = 2). Um contador é uma variável usada para registrar quantas vezes um trecho de algoritmo é executado: é declarada com um valor inicial e incrementada (somada de uma constante, normalmente 1) a cada repetição, comportando-se como o ponteiro dos segundos de um relógio."
+    # FÁCEIS
+    "Lógica de programação é o uso correto das leis do pensamento, da ‘ordem da razão’ e de processos formais de raciocínio e simbolização na programação de computadores, com o objetivo de produzir soluções logicamente válidas e coerentes para resolver problemas.",
+    "Um algoritmo é uma sequência de passos bem definidos que têm por objetivo solucionar um determinado problema.",
+    "Um dado é constante quando não sofre variação durante a execução do algoritmo: seu valor permanece constante do início ao fim (e também em execuções diferentes ao longo do tempo). Já um dado é variável quando pode ser alterado em algum instante durante a execução do algoritmo, ou quando seu valor depende da execução em um certo momento ou circunstância.",
+    "O comando de entrada de dados ‘leia’ é usado para que o algoritmo receba os dados de que precisa: ele tem a finalidade de atribuir o dado fornecido à variável identificada, seguindo a sintaxe leia(identificador) (por exemplo, leia(X) ou leia(A, XPTO, NOTA)).",
+
+    # MÉDIAS
+    "Um comando de atribuição permite fornecer um valor a uma variável. O tipo do dado atribuído deve ser compatível com o tipo da variável: por exemplo, só se pode atribuir um valor lógico a uma variável declarada como do tipo lógico.",
+    "Operadores aritméticos são o conjunto de símbolos que representam as operações básicas da matemática (por exemplo: + para adição, - para subtração, * para multiplicação e / para divisão). Para potenciação e radiciação, o livro indica o uso das palavras-chave pot e rad.",
+    "Operadores relacionais são usados para realizar comparações entre dois valores de mesmo tipo primitivo. Esses valores podem ser constantes, variáveis ou expressões aritméticas, e esses operadores são comuns na construção de equações.",
+
+    # DIFÍCEIS
+    "Uma expressão lógica é aquela cujos operadores são lógicos ou relacionais e cujos operandos são relações, variáveis ou constantes do tipo lógico.",
+    "Um contador é um modo de contagem feito com a ajuda de uma variável com um valor inicial, que é incrementada a cada repetição. Incrementar significa somar um valor constante (normalmente 1) a cada repetição.",
+    "A estrutura de repetição ‘repita ... até’ permite que um bloco (ou ação primitiva) seja repetido até que uma determinada condição seja verdadeira. Pela sintaxe da estrutura, o bloco é executado pelo menos uma vez, independentemente da validade inicial da condição."
 ]
 
-llm = init_chat_model(
-    model=os.getenv("OPEN_MODEL", "openai-gpt-oss-120b"),
-    model_provider="openai",
-    base_url=os.getenv("OPEN_API_URL", "https://inference.do-ai.run/v1"),
+llm = build_llm()
+llm_extractor = build_llm()
+embeddings = build_embeddings()
+vector_store = Chroma(
+    collection_name=CHROMA_COLLECTION_NAME,
+    embedding_function=embeddings,
+    persist_directory=PERSIST_DIR,
 )
-
-llm_extractor = init_chat_model(
-    model=os.getenv("OPEN_MODEL", "openai-gpt-oss-120b"),
-    model_provider="openai",
-    base_url=os.getenv("OPEN_API_URL", "https://inference.do-ai.run/v1"),
-)
-
-embeddings = HuggingFaceEmbeddings(model_name="sentence-transformers/all-MiniLM-L6-v2")
-vector_store = InMemoryVectorStore(embeddings)
 
 
 @dataclass
@@ -199,7 +205,7 @@ def extract_entities_from_chunk(chunk: Document) -> Dict:
         HumanMessage(content=prompt),
     ]
     response = llm_extractor.invoke(messages)
-    raw = response.content.strip()
+    raw = extract_response_text(response).strip()
     raw = re.sub(r"```(?:json)?\s*", "", raw).strip().rstrip("`")
     try:
         return json.loads(raw)
@@ -310,50 +316,42 @@ checkpointer = MemorySaver()
 agent = workflow.compile(checkpointer=checkpointer)
 
 
-def query_graph_rag(question: str, thread_id: Optional[str] = None) -> Dict[str, Any]:
+@traceable(name="graph-rag-query", run_type="chain")
+def query_graph_rag(
+    question: str,
+    thread_id: Optional[str] = None,
+    callbacks=None,
+) -> Dict[str, Any]:
     if thread_id is None:
         thread_id = str(uuid.uuid4())
+    config = {"configurable": {"thread_id": thread_id}}
+
+    if callbacks:
+        config["callbacks"] = callbacks
+
     events = list(agent.stream(
         {"messages": [{"role": "user", "content": question}]},
-        config={"configurable": {"thread_id": thread_id}},
+        config=config,
         stream_mode="values",
     ))
     final_event = events[-1]
-    answer = final_event["messages"][-1].content
+    answer = extract_response_text(final_event["messages"][-1])
     retrieved_docs = vector_store.similarity_search(question, k=3)
     contexts = [doc.page_content for doc in retrieved_docs]
     return {"question": question, "answer": answer, "contexts": contexts}
 
 
 def run_ragas(ragas_data, llm_eval, embeddings_eval):
-    dataset = Dataset.from_list(ragas_data)
-    result = evaluate(
-        dataset,
-        metrics=[faithfulness, answer_relevancy, context_precision, context_recall],
-        llm=llm_eval,
-        embeddings=embeddings_eval,
-    )
-    print("\n=== RESULTADOS RAGAS ===")
-    print(result)
-    df = result.to_pandas()
-    print("\nDetalhes por query:")
-    print(df.to_string())
-    return result
+    return avaliar_com_ragas(ragas_data, llm_eval, embeddings_eval)
 
 
 def salvar(df, nome_base="graph-rag"):
-    os.makedirs("results", exist_ok=True)
-    for i in count(1):
-        nome = os.path.join("results", f"{nome_base}_{i}.csv")
-        if not os.path.exists(nome):
-            df.to_csv(nome, index=False, encoding="utf-8-sig", sep=";")
-            print(f"Salvo em: {nome}")
-            break
+    salvar_resultados(df, nome_base)
 
 
 def main():
-    print("Carregando documentos de ../docs/ ...")
-    loader = DirectoryLoader(path="../docs/", glob="**/*.pdf", loader_cls=PyPDFLoader)
+    print(f"Carregando documentos de {DOCS_DIR} ...")
+    loader = DirectoryLoader(path=DOCS_DIR, glob="**/*.pdf", loader_cls=PyPDFLoader)
     docs = loader.load()
     print(f"{len(docs)} páginas carregadas")
 
@@ -364,12 +362,17 @@ def main():
     for i, split in enumerate(all_splits):
         split.metadata["chunk_id"] = f"chunk_{i}"
 
-    print(f"Adicionando {len(all_splits)} chunks ao vector store em batches...")
-    batch_size = 500
-    for i in range(0, len(all_splits), batch_size):
-        batch = all_splits[i:i + batch_size]
-        vector_store.add_documents(documents=batch)
-        print(f"  {min(i + batch_size, len(all_splits))}/{len(all_splits)} chunks adicionados")
+    if vector_store._collection.count() == 0:
+        print(f"Adicionando {len(all_splits)} chunks ao Chroma em batches...")
+        batch_size = 500
+        for i in range(0, len(all_splits), batch_size):
+            batch = all_splits[i:i + batch_size]
+            vector_store.add_documents(documents=batch)
+            print(f"  {min(i + batch_size, len(all_splits))}/{len(all_splits)} chunks adicionados")
+
+        print("Ingestão concluída!")
+    else:
+        print(f"Coleção existente com {vector_store._collection.count()} chunks. Pulando ingestão.")
 
     max_chunks = min(len(all_splits), 20)
     print(f"\nExtraindo entidades de {max_chunks} chunks para o knowledge graph...")
@@ -384,27 +387,30 @@ def main():
     stats = knowledge_graph.stats
     print(f"\nGrafo construído: {stats['nodes']} nós | {stats['edges']} arestas")
 
-    print("\nColetando respostas para avaliação RAGAS...")
-    ragas_data = []
-    for i, query in enumerate(test_queries):
-        print(f"  [{i+1}/{len(test_queries)}] {query}")
-        result = query_graph_rag(query)
-        ragas_data.append({
-            "question": result["question"],
-            "answer": result["answer"],
-            "contexts": result["contexts"],
-            "ground_truth": ground_truths[i],
-        })
+    for run in range(5):
+        print(f"\n=== RODADA {run + 1}/5 ===")
+        eval_llm = build_ragas_llm()
 
-    eval_llm = init_chat_model(
-        model=os.getenv("OPEN_MODEL", "openai-gpt-oss-120b"),
-        model_provider="openai",
-        base_url=os.getenv("OPEN_API_URL", "https://inference.do-ai.run/v1"),
-    )
+        print("Coletando respostas para avaliação RAGAS...")
+        ragas_data = []
 
-    result = run_ragas(ragas_data, eval_llm, embeddings)
-    salvar(result.to_pandas())
+        for i, query in enumerate(test_queries):
+            print(f"  [{i + 1}/{len(test_queries)}] {query}")
+            tracker, started_at = start_usage_tracker()
+            result = query_graph_rag(query, callbacks=[tracker])
+            ragas_item = {
+                "question": result["question"],
+                "answer": result["answer"],
+                "contexts": result["contexts"],
+                "ground_truth": ground_truths[i],
+            }
+            ragas_item.update(finish_usage_tracker(tracker, started_at))
+            ragas_data.append(ragas_item)
+
+        df_resultado = run_ragas(ragas_data, eval_llm, embeddings)
+        salvar(df_resultado, nome_base=f"graph-rag-run-{run + 1}")
 
 
 if __name__ == "__main__":
     main()
+

@@ -8,5 +8,6 @@
 __pycache__
 
 chroma_context_db
+chroma_graph_db_openai
 results*
 docs_backup
